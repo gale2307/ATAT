@@ -1,0 +1,33 @@
+# NLLB-200 fine-tuning configuration for LoL domain translation
+base_model: facebook/nllb-200-distilled-600M
+src_lang: kor_Hang
+tgt_lang: eng_Latn
+
+# Training hyperparameters
+training:
+  output_dir: ./checkpoints/nllb-lol
+  num_train_epochs: 5
+  per_device_train_batch_size: 16
+  per_device_eval_batch_size: 16
+  gradient_accumulation_steps: 2
+  learning_rate: 5.0e-5
+  warmup_ratio: 0.05
+  eval_steps: 200
+  save_steps: 200
+  logging_steps: 10
+  fp16: true
+  max_source_length: 256
+  max_target_length: 256
+  report_to: wandb
+
+# Dataset
+dataset:
+  train: ./data/processed/translation_train.json
+  eval: ./data/processed/translation_eval.json
+  source_column: korean
+  target_column: english
+
+# HuggingFace Hub
+hub:
+  push_to_hub: true
+  hub_model_id: your-username/nllb-200-lol-ko-en

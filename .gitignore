@@ -1,0 +1,39 @@
+# Node
+node_modules/
+.next/
+frontend/.env.local
+frontend/.env.production
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+*.egg-info/
+.pytest_cache/
+
+# Environment
+backend/.env
+.env
+
+# Local DB
+*.db
+
+# Storage
+/tmp/
+backend/tmp/
+training/data/raw/
+training/data/processed/
+training/checkpoints/
+
+# ML artifacts
+*.pt
+*.bin
+*.safetensors
+wandb/
+
+# OS
+.DS_Store
+Thumbs.db

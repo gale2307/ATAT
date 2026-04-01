@@ -1,0 +1,48 @@
+# Whisper large-v3 LoRA fine-tuning configuration
+base_model: openai/whisper-large-v3
+task: transcribe
+language: ko
+
+# LoRA config
+lora:
+  r: 32
+  lora_alpha: 64
+  target_modules:
+    - q_proj
+    - v_proj
+    - k_proj
+    - out_proj
+    - fc1
+    - fc2
+  lora_dropout: 0.05
+  bias: none
+  task_type: SEQ_2_SEQ_LM
+
+# Training hyperparameters
+training:
+  output_dir: ./checkpoints/whisper-large-v3-lol
+  num_train_epochs: 3
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 2
+  learning_rate: 1.0e-4
+  warmup_steps: 500
+  eval_steps: 500
+  save_steps: 500
+  logging_steps: 25
+  fp16: true
+  dataloader_num_workers: 4
+  max_audio_length: 30  # seconds (Whisper encoder max)
+  report_to: wandb
+
+# Dataset
+dataset:
+  train: ./data/processed/train
+  eval: ./data/processed/eval
+  audio_column: audio
+  text_column: sentence
+
+# HuggingFace Hub
+hub:
+  push_to_hub: true
+  hub_model_id: your-username/whisper-large-v3-lol-lora
