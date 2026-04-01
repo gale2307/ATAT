@@ -12,7 +12,7 @@ from app.models.database import engine
 from app.models.job import Job, JobStatus
 from app.services.downloader import download_video, extract_audio
 from app.services.subtitle import generate_srt, generate_vtt
-from app.services.transcriber import transcribe, transcribe_gpt4o, transcribe_mock
+from app.services.transcriber import get_transcription_engine
 from app.services.translator import get_translation_engine
 from app.socket import emit_done, emit_error, emit_progress
 
@@ -53,7 +53,6 @@ async def run_job(job_id: str):
         video_path, _title = await loop.run_in_executor(None, download_video, job.url, job_id)
         logger.info("[%s] Download complete: %s", job_id, video_path)
 
-        # Extract audio from video for STT
         audio_path = output_dir / "audio.wav"
         logger.info("[%s] Extracting audio", job_id)
         await loop.run_in_executor(None, extract_audio, video_path, audio_path)
@@ -64,12 +63,8 @@ async def run_job(job_id: str):
         await emit_progress(job_id, 30, "transcribing")
         logger.info("[%s] Transcribing with model: %s", job_id, job.stt_model)
 
-        if settings.mock_mode:
-            segments = await loop.run_in_executor(None, transcribe_mock)
-        elif job.stt_model == "gpt-4o-transcribe":
-            segments = await loop.run_in_executor(None, transcribe_gpt4o, audio_path, job.src_lang)
-        else:
-            segments = await loop.run_in_executor(None, transcribe, audio_path, job.stt_model, job.src_lang)
+        transcriber = get_transcription_engine(job.stt_model, mock=settings.mock_mode)
+        segments = await loop.run_in_executor(None, transcriber.transcribe, audio_path, job.src_lang)
         logger.info("[%s] Transcription complete: %d segments", job_id, len(segments))
 
         # --- Step 3: Translate ---
@@ -77,14 +72,14 @@ async def run_job(job_id: str):
         await emit_progress(job_id, 60, "translating")
         logger.info("[%s] Translating with engine: %s", job_id, job.translation_engine)
 
-        engine_inst = get_translation_engine(
+        translator = get_translation_engine(
             job.translation_engine,
             domain=job.domain,
             src_lang=job.src_lang,
             tgt_lang=job.tgt_lang,
             mock=settings.mock_mode,
         )
-        translated = await loop.run_in_executor(None, engine_inst.translate, segments)
+        translated = await loop.run_in_executor(None, translator.translate, segments)
         logger.info("[%s] Translation complete: %d segments", job_id, len(translated))
 
         # --- Step 4: Generate subtitles ---

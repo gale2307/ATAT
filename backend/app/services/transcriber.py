@@ -1,4 +1,5 @@
-"""STT engine abstraction — faster-whisper (local) and GPT-4o Transcribe (API)."""
+"""STT engine abstraction — Protocol-based swappable backends."""
+import base64
 import json
 import logging
 import re
@@ -7,7 +8,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Protocol
 
 import httpx
 from faster_whisper import WhisperModel
@@ -22,11 +23,15 @@ class TranscriptSegment:
     text: str
 
 
+class TranscriptionEngine(Protocol):
+    def transcribe(self, audio_path: Path, src_lang: str) -> list[TranscriptSegment]: ...
+
+
 # ---------------------------------------------------------------------------
 # Mock
 # ---------------------------------------------------------------------------
 
-MOCK_SEGMENTS = [
+_MOCK_SEGMENTS = [
     TranscriptSegment(start=0.0,  end=3.5,  text="페이커가 오리아나로 쇼크웨이브를 적중시킵니다!"),
     TranscriptSegment(start=3.5,  end=7.0,  text="T1이 팀파이트를 완벽하게 승리했습니다."),
     TranscriptSegment(start=7.0,  end=11.5, text="바론을 획득한 T1, 이제 게임을 마무리지으러 갑니다."),
@@ -35,59 +40,60 @@ MOCK_SEGMENTS = [
 ]
 
 
-def transcribe_mock() -> list[TranscriptSegment]:
-    """Return static segments without loading any model."""
-    time.sleep(1)
-    return MOCK_SEGMENTS
+class MockTranscriber:
+    """Returns static Korean segments without loading any model."""
+
+    def transcribe(self, audio_path: Path, src_lang: str = "ko") -> list[TranscriptSegment]:
+        time.sleep(1)
+        return list(_MOCK_SEGMENTS)
 
 
 # ---------------------------------------------------------------------------
 # Local faster-whisper
 # ---------------------------------------------------------------------------
 
-def get_whisper_model(model_id: str) -> WhisperModel:
-    model_map = {
-        "whisper-large-v3": "large-v3",
-        "whisper-large-v3-turbo": "large-v3-turbo",
-        "whisper-medium": "medium",
-        "whisper-large-v3-lol": "large-v3-lol",  # TODO: load LoRA from HF_STT_MODEL_REPO
-    }
-    model_size = model_map.get(model_id, "large-v3")
-    return WhisperModel(model_size, device="cpu", compute_type="int8")
+_WHISPER_MODEL_MAP = {
+    "whisper-large-v3": "large-v3",
+    "whisper-large-v3-turbo": "large-v3-turbo",
+    "whisper-medium": "medium",
+    "whisper-large-v3-lol": "large-v3",  # TODO: load LoRA from HF_STT_MODEL_REPO
+}
 
 
-def transcribe(audio_path: Path, model_id: str = "whisper-large-v3", src_lang: str = "ko") -> list[TranscriptSegment]:
-    """Transcribe audio with faster-whisper and return timestamped segments."""
-    model = get_whisper_model(model_id)
-    segments, _info = model.transcribe(
-        str(audio_path),
-        language=src_lang,
-        task="transcribe",
-        beam_size=5,
-        vad_filter=True,
-        vad_parameters={"min_silence_duration_ms": 500},
-    )
-    return [TranscriptSegment(start=s.start, end=s.end, text=s.text.strip()) for s in segments]
+class LocalWhisperTranscriber:
+    """Local faster-whisper inference (CPU, int8)."""
 
+    def __init__(self, model_id: str = "whisper-large-v3"):
+        model_size = _WHISPER_MODEL_MAP.get(model_id, "large-v3")
+        self._model = WhisperModel(model_size, device="cpu", compute_type="int8")
 
-def transcribe_chunks(audio_path: Path, model_id: str = "whisper-large-v3", src_lang: str = "ko") -> Iterator[TranscriptSegment]:
-    """Streaming transcription — yields segments as they complete."""
-    model = get_whisper_model(model_id)
-    segments, _info = model.transcribe(str(audio_path), language=src_lang, task="transcribe")
-    for s in segments:
-        yield TranscriptSegment(start=s.start, end=s.end, text=s.text.strip())
+    def transcribe(self, audio_path: Path, src_lang: str = "ko") -> list[TranscriptSegment]:
+        segments, _ = self._model.transcribe(
+            str(audio_path),
+            language=src_lang,
+            task="transcribe",
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters={"min_silence_duration_ms": 500},
+        )
+        return [TranscriptSegment(start=s.start, end=s.end, text=s.text.strip()) for s in segments]
+
+    def transcribe_stream(self, audio_path: Path, src_lang: str = "ko") -> Iterator[TranscriptSegment]:
+        """Yield segments one at a time as they complete."""
+        segments, _ = self._model.transcribe(str(audio_path), language=src_lang, task="transcribe")
+        for s in segments:
+            yield TranscriptSegment(start=s.start, end=s.end, text=s.text.strip())
 
 
 # ---------------------------------------------------------------------------
 # GPT-4o Transcribe (OpenAI API)
 # ---------------------------------------------------------------------------
 
-OPENAI_TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions"
-OPENAI_MAX_BYTES = 25 * 1024 * 1024  # API limit
+_OPENAI_TRANSCRIBE_URL = "https://api.openai.com/v1/audio/transcriptions"
+_OPENAI_MAX_BYTES = 25 * 1024 * 1024
 
 
 def _audio_duration(path: Path) -> float:
-    """Return audio duration in seconds using ffprobe."""
     result = subprocess.run(
         ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", str(path)],
         capture_output=True, text=True,
@@ -96,71 +102,109 @@ def _audio_duration(path: Path) -> float:
 
 
 def _split_sentences(text: str) -> list[str]:
-    """Split transcript text on sentence boundaries."""
     parts = re.split(r"(?<=[.!?。！？])\s+", text.strip())
     return [p.strip() for p in parts if p.strip()]
 
 
-def transcribe_gpt4o(audio_path: Path, src_lang: str = "ko", api_key: str = "") -> list[TranscriptSegment]:
-    """Transcribe audio using the OpenAI GPT-4o Transcribe API.
+class GPT4oTranscriber:
+    """OpenAI GPT-4o Transcribe API. Converts audio to 16kHz mono MP3 before upload."""
 
-    Returns timestamped segments. Requires OPENAI_API_KEY.
-    Audio is converted to 16kHz mono MP3 before upload. Raises if the
-    converted file still exceeds the OpenAI 25 MB limit (~26 min at 128kbps).
-    """
-    if not api_key:
-        from app.config import settings
-        api_key = settings.openai_api_key
-    if not api_key:
-        raise ValueError("OPENAI_API_KEY is not set")
+    def __init__(self, api_key: str = ""):
+        if not api_key:
+            from app.config import settings
+            api_key = settings.openai_api_key
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY is not set")
+        self._api_key = api_key
 
-    # Convert to 16kHz mono MP3 — avoids 500s caused by non-standard WAV encodings
-    # from yt-dlp (stereo, 48kHz, 32-bit float, etc.)
-    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-        mp3_path = Path(tmp.name)
+    def transcribe(self, audio_path: Path, src_lang: str = "ko") -> list[TranscriptSegment]:
+        mp3_path = self._to_mp3(audio_path)
+        try:
+            duration = _audio_duration(mp3_path)
+            return self._call_api(mp3_path, src_lang, duration)
+        finally:
+            mp3_path.unlink(missing_ok=True)
 
-    result = subprocess.run(
-        ["ffmpeg", "-i", str(audio_path), "-ar", "16000", "-ac", "1", "-b:a", "128k", str(mp3_path), "-y"],
-        capture_output=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"ffmpeg conversion failed: {result.stderr.decode()}")
+    def _to_mp3(self, audio_path: Path) -> Path:
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
+            mp3_path = Path(tmp.name)
+        result = subprocess.run(
+            ["ffmpeg", "-i", str(audio_path), "-ar", "16000", "-ac", "1", "-b:a", "128k", str(mp3_path), "-y"],
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg conversion failed: {result.stderr.decode()}")
+        if mp3_path.stat().st_size > _OPENAI_MAX_BYTES:
+            mp3_path.unlink(missing_ok=True)
+            raise ValueError(f"Audio exceeds OpenAI 25 MB limit after MP3 conversion: {audio_path}")
+        return mp3_path
 
-    if mp3_path.stat().st_size > OPENAI_MAX_BYTES:
-        mp3_path.unlink(missing_ok=True)
-        raise ValueError(f"Audio exceeds OpenAI 25 MB limit even after MP3 conversion: {audio_path}")
-
-    try:
-        duration = _audio_duration(mp3_path)
+    def _call_api(self, mp3_path: Path, src_lang: str, duration: float) -> list[TranscriptSegment]:
         with open(mp3_path, "rb") as f:
             response = httpx.post(
-                OPENAI_TRANSCRIBE_URL,
-                headers={"Authorization": f"Bearer {api_key}"},
-                data={
-                    "model": "gpt-4o-transcribe",
-                    "language": src_lang,
-                    "response_format": "json",
-                },
+                _OPENAI_TRANSCRIBE_URL,
+                headers={"Authorization": f"Bearer {self._api_key}"},
+                data={"model": "gpt-4o-transcribe", "language": src_lang, "response_format": "json"},
                 files={"file": (mp3_path.name, f, "audio/mpeg")},
                 timeout=300,
             )
         if not response.is_success:
-            logger.error(
-                "OpenAI transcription error: status=%s body=%s",
-                response.status_code,
-                response.text,
-            )
+            logger.error("OpenAI transcription error: status=%s body=%s", response.status_code, response.text)
         response.raise_for_status()
-    finally:
-        mp3_path.unlink(missing_ok=True)
 
-    text = response.json().get("text", "").strip()
-    sentences = _split_sentences(text)
-    if not sentences:
-        return [TranscriptSegment(start=0.0, end=duration, text=text)]
+        text = response.json().get("text", "").strip()
+        sentences = _split_sentences(text)
+        if not sentences:
+            return [TranscriptSegment(start=0.0, end=duration, text=text)]
 
-    interval = duration / len(sentences)
-    return [
-        TranscriptSegment(start=i * interval, end=(i + 1) * interval, text=s)
-        for i, s in enumerate(sentences)
-    ]
+        interval = duration / len(sentences)
+        return [
+            TranscriptSegment(start=i * interval, end=(i + 1) * interval, text=s)
+            for i, s in enumerate(sentences)
+        ]
+
+
+# ---------------------------------------------------------------------------
+# RunPod Serverless faster-whisper worker
+# ---------------------------------------------------------------------------
+
+class RunPodTranscriber:
+    """Sends audio to a RunPod Serverless faster-whisper worker. Returns real timestamps."""
+
+    def __init__(self):
+        from app.config import settings
+        if not settings.stt_worker_url:
+            raise ValueError("STT_WORKER_URL is not set")
+        self._url = settings.stt_worker_url
+        self._api_key = settings.runpod_api_key
+
+    def transcribe(self, audio_path: Path, src_lang: str = "ko") -> list[TranscriptSegment]:
+        audio_b64 = base64.b64encode(audio_path.read_bytes()).decode()
+        resp = httpx.post(
+            self._url,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            json={"input": {"audio_b64": audio_b64, "src_lang": src_lang}},
+            timeout=300,
+        )
+        if not resp.is_success:
+            logger.error("RunPod STT error: status=%s body=%s", resp.status_code, resp.text)
+        resp.raise_for_status()
+        return [
+            TranscriptSegment(start=s["start"], end=s["end"], text=s["text"])
+            for s in resp.json()["output"]["segments"]
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+def get_transcription_engine(model_id: str, mock: bool = False) -> TranscriptionEngine:
+    if mock:
+        return MockTranscriber()
+    if model_id == "gpt-4o-transcribe":
+        return GPT4oTranscriber()
+    from app.config import settings
+    if settings.stt_worker_url:
+        return RunPodTranscriber()
+    return LocalWhisperTranscriber(model_id)
