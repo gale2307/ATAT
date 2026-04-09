@@ -1,3 +1,4 @@
+import logging
 import uuid
 from typing import Annotated
 
@@ -9,6 +10,7 @@ from app.models.database import get_session
 from app.models.job import Job, JobStatus
 from app.pipeline import run_job
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 SessionDep = Annotated[Session, Depends(get_session)]
@@ -52,6 +54,11 @@ async def create_job(payload: JobCreate, background_tasks: BackgroundTasks, sess
     session.commit()
     session.refresh(job)
 
+    logger.info(
+        "[%s] Job queued — url=%s model=%s engine=%s domain=%s %s→%s mode=%s",
+        job_id, payload.url, payload.stt_model, payload.translation_engine,
+        payload.domain, payload.src_lang, payload.tgt_lang, payload.download_mode,
+    )
     background_tasks.add_task(run_job, job_id)
 
     return JobResponse(

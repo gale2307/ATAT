@@ -42,6 +42,10 @@ async def run_job(job_id: str):
         if not job:
             return
 
+        logger.info("[%s] Job started — model=%s engine=%s domain=%s %s→%s mode=%s",
+                    job_id, job.stt_model, job.translation_engine,
+                    job.domain, job.src_lang, job.tgt_lang, job.download_mode)
+
         output_dir = Path(settings.storage_path) / job_id
         output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -52,7 +56,7 @@ async def run_job(job_id: str):
         audio_path = output_dir / "audio.wav"
 
         if job.download_mode == "audio_only":
-            logger.info("[%s] Downloading audio only: %s", job_id, job.url)
+            logger.info("[%s] Downloading audio: %s", job_id, job.url)
             audio_path, _title = await loop.run_in_executor(None, download_audio, job.url, job_id)
             video_path = None
         else:
@@ -61,21 +65,21 @@ async def run_job(job_id: str):
             logger.info("[%s] Extracting audio", job_id)
             await loop.run_in_executor(None, extract_audio, video_path, audio_path)
 
-        logger.info("[%s] Audio ready: %s", job_id, audio_path)
+        logger.info("[%s] Download complete", job_id)
 
         # --- Step 2: Transcribe ---
         _update(JobStatus.transcribing, 30)
         await emit_progress(job_id, 30, "transcribing")
-        logger.info("[%s] Transcribing with model: %s", job_id, job.stt_model)
+        logger.info("[%s] Transcription started — model=%s", job_id, job.stt_model)
 
         transcriber = get_transcription_engine(job.stt_model, mock=settings.mock_mode)
         segments = await loop.run_in_executor(None, transcriber.transcribe, audio_path, job.src_lang)
-        logger.info("[%s] Transcription complete: %d segments", job_id, len(segments))
+        logger.info("[%s] Transcription finished — %d segments", job_id, len(segments))
 
         # --- Step 3: Translate ---
         _update(JobStatus.translating, 60)
         await emit_progress(job_id, 60, "translating")
-        logger.info("[%s] Translating with engine: %s", job_id, job.translation_engine)
+        logger.info("[%s] Translation started — engine=%s", job_id, job.translation_engine)
 
         translator = get_translation_engine(
             job.translation_engine,
@@ -85,12 +89,11 @@ async def run_job(job_id: str):
             mock=settings.mock_mode,
         )
         translated = await loop.run_in_executor(None, translator.translate, segments)
-        logger.info("[%s] Translation complete: %d segments", job_id, len(translated))
+        logger.info("[%s] Translation finished — %d segments", job_id, len(translated))
 
         # --- Step 4: Generate subtitles ---
         _update(JobStatus.rendering, 80)
         await emit_progress(job_id, 80, "rendering")
-        logger.info("[%s] Generating subtitle files", job_id)
 
         generate_srt(translated, output_dir / "subtitles.srt")
         if job.download_mode == "video":
@@ -101,7 +104,7 @@ async def run_job(job_id: str):
             output_path=str(video_path) if video_path else None,
             subtitle_path=str(output_dir / "subtitles.srt"),
         )
-        logger.info("[%s] Job complete", job_id)
+        logger.info("[%s] Job done", job_id)
 
         if job.download_mode == "audio_only":
             await emit_done(

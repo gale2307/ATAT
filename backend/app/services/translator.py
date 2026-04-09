@@ -1,5 +1,6 @@
 """Translation engine abstraction — Protocol-based swappable backends."""
 import logging
+import re
 import time
 from typing import Protocol
 
@@ -55,8 +56,10 @@ class QwenMTEngine:
         self._tgt_lang = LANGUAGE_LABELS.get(tgt_lang, tgt_lang)
         self._glossary = load_glossary(domain)
 
-    # Max segments per API call — keeps each request well under the token limit
-    _BATCH_SIZE = 50
+    # Max segments per API call. 50 can exceed Qwen-MT's output token limit for
+    # longer segments, causing the last lines to be silently dropped. 20 keeps
+    # both input and output well within limits (~3 calls per typical video).
+    _BATCH_SIZE = 30
 
     def translate(self, segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
         results = []
@@ -70,24 +73,58 @@ class QwenMTEngine:
     def _translate_batch(self, texts: list[str]) -> list[str]:
         """Translate a list of texts in a single API call using numbered lines."""
         numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
-        translated = self._call_api(numbered)
-        lines = [line.partition(". ")[2].strip() for line in translated.splitlines() if line.strip()]
-        # Fall back to original text for any lines the model dropped
-        if len(lines) != len(texts):
-            logger.warning("Qwen-MT line count mismatch: expected %d got %d", len(texts), len(lines))
-            lines.extend(texts[len(lines):])
+        batch_terms = self._terms_for_batch(texts)
+        logger.debug("Qwen-MT batch: %d segments, %d glossary terms", len(texts), len(batch_terms))
+        translated = self._call_api(numbered, batch_terms)
+        logger.debug("Qwen-MT raw response:\n%s", translated)
+
+        # Only accept lines that match the numbering pattern — ignores blank lines,
+        # model commentary, and newlines embedded in a translated sentence.
+        lines = [
+            m.group(1).strip()
+            for line in translated.splitlines()
+            if (m := re.match(r"^\d+\.\s+(.*)", line.strip()))
+        ]
+
+        if len(lines) < len(texts):
+            missing = texts[len(lines):]
+            logger.warning(
+                "Qwen-MT returned fewer lines than expected (%d/%d) — padding with source text: %s",
+                len(lines), len(texts), missing,
+            )
+            lines.extend(missing)
+        elif len(lines) > len(texts):
+            extra = lines[len(texts):]
+            logger.warning(
+                "Qwen-MT returned more lines than expected (%d/%d) — truncating extra: %s",
+                len(lines), len(texts), extra,
+            )
+            lines = lines[:len(texts)]
+
         return lines
 
-    def _call_api(self, text: str) -> str:
+    def _terms_for_batch(self, texts: list[str]) -> list[dict]:
+        """Return only glossary terms whose source appears in the current batch."""
+        combined = " ".join(texts)
+        return [
+            {"source": k, "target": v}
+            for k, v in self._glossary.items()
+            if k in combined
+        ]
+
+    def _call_api(self, text: str, terms: list[dict]) -> str:
+        translation_options: dict = {
+            "source_lang": self._src_lang,
+            "target_lang": self._tgt_lang,
+        }
+        if terms:
+            translation_options["terms"] = terms
+
         response = dashscope.Generation.call(
             api_key=self._api_key,
             model="qwen-mt-flash",
             messages=[{"role": "user", "content": text}],
-            translation_options={
-                "source_lang": self._src_lang,
-                "target_lang": self._tgt_lang,
-                "terms": [{"source": k, "target": v} for k, v in list(self._glossary.items())[:50]],
-            },
+            translation_options=translation_options,
             result_format="message",
         )
         if response.status_code != 200:
