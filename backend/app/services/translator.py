@@ -55,13 +55,30 @@ class QwenMTEngine:
         self._tgt_lang = LANGUAGE_LABELS.get(tgt_lang, tgt_lang)
         self._glossary = load_glossary(domain)
 
-    def translate(self, segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
-        return [
-            TranscriptSegment(start=s.start, end=s.end, text=self._translate_text(s.text))
-            for s in segments
-        ]
+    # Max segments per API call — keeps each request well under the token limit
+    _BATCH_SIZE = 50
 
-    def _translate_text(self, text: str) -> str:
+    def translate(self, segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
+        results = []
+        for i in range(0, len(segments), self._BATCH_SIZE):
+            batch = segments[i : i + self._BATCH_SIZE]
+            translated_texts = self._translate_batch([s.text for s in batch])
+            for segment, text in zip(batch, translated_texts):
+                results.append(TranscriptSegment(start=segment.start, end=segment.end, text=text))
+        return results
+
+    def _translate_batch(self, texts: list[str]) -> list[str]:
+        """Translate a list of texts in a single API call using numbered lines."""
+        numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+        translated = self._call_api(numbered)
+        lines = [line.partition(". ")[2].strip() for line in translated.splitlines() if line.strip()]
+        # Fall back to original text for any lines the model dropped
+        if len(lines) != len(texts):
+            logger.warning("Qwen-MT line count mismatch: expected %d got %d", len(texts), len(lines))
+            lines.extend(texts[len(lines):])
+        return lines
+
+    def _call_api(self, text: str) -> str:
         response = dashscope.Generation.call(
             api_key=self._api_key,
             model="qwen-mt-flash",

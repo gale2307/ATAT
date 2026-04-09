@@ -6,8 +6,21 @@ from pathlib import Path
 import runpod
 from faster_whisper import WhisperModel
 
-# Load model once at cold start — cached for all subsequent requests
-MODEL = WhisperModel("medium", device="cuda", compute_type="float16")
+_MODEL_MAP = {
+    "whisper-large-v3": "large-v3",
+    "whisper-large-v3-turbo": "large-v3-turbo",
+    "whisper-medium": "medium",
+    "whisper-large-v3-lol": "large-v3",  # TODO: load LoRA from HF
+}
+
+_model_cache: dict[str, WhisperModel] = {}
+
+
+def _get_model(model_id: str) -> WhisperModel:
+    if model_id not in _model_cache:
+        model_size = _MODEL_MAP.get(model_id, "medium")
+        _model_cache[model_id] = WhisperModel(model_size, device="cuda", compute_type="float16")
+    return _model_cache[model_id]
 
 
 def handler(event):
@@ -16,12 +29,14 @@ def handler(event):
     Input:
         audio_b64 (str): base64-encoded WAV bytes
         src_lang  (str): BCP-47 language code, e.g. "ko" (default)
+        model_id  (str): STT model ID, e.g. "whisper-medium" (default)
 
     Output:
         segments: list of {start: float, end: float, text: str}
     """
     audio_b64 = event["input"]["audio_b64"]
     src_lang = event["input"].get("src_lang", "ko")
+    model_id = event["input"].get("model_id", "whisper-medium")
 
     audio_bytes = base64.b64decode(audio_b64)
 
@@ -30,7 +45,8 @@ def handler(event):
         tmp_path = Path(f.name)
 
     try:
-        segments, _ = MODEL.transcribe(
+        model = _get_model(model_id)
+        segments, _ = model.transcribe(
             str(tmp_path),
             language=src_lang,
             task="transcribe",

@@ -40,13 +40,13 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-STT_MODELS = [
-    {"id": "whisper-large-v3", "label": "Whisper large-v3", "type": "local"},
-    {"id": "whisper-large-v3-turbo", "label": "Whisper large-v3-turbo", "type": "local"},
-    {"id": "whisper-medium", "label": "Whisper medium", "type": "local"},
-    {"id": "whisper-large-v3-lol", "label": "Whisper large-v3 (LoL fine-tuned)", "type": "lora", "domain": "lol-esports"},
-    {"id": "gpt-4o-transcribe", "label": "GPT-4o Transcribe (API)", "type": "api"},
-]
+STT_MODELS: dict[str, dict] = {
+    "whisper-medium":        {"label": "Whisper medium",                    "type": "runpod"},
+    "whisper-large-v3":      {"label": "Whisper large-v3",                  "type": "runpod"},
+    "whisper-large-v3-turbo":{"label": "Whisper large-v3-turbo",            "type": "runpod"},
+    "whisper-large-v3-lol":  {"label": "Whisper large-v3 (LoL fine-tuned)", "type": "runpod", "domain": "lol-esports"},
+    "gpt-4o-transcribe":     {"label": "GPT-4o Transcribe (API)",           "type": "api"},
+}
 
 TRANSLATION_ENGINES = [
     {"id": "qwen-mt", "label": "Qwen-MT Turbo (API)", "type": "api"},

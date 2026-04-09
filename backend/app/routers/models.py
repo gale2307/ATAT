@@ -6,4 +6,8 @@ router = APIRouter(prefix="/models", tags=["models"])
 
 @router.get("")
 async def list_models():
-    return {"sttModels": STT_MODELS, "translationEngines": TRANSLATION_ENGINES, "languagePairs": LANGUAGE_PAIRS}
+    return {
+        "sttModels": [{"id": k, **v} for k, v in STT_MODELS.items()],
+        "translationEngines": TRANSLATION_ENGINES,
+        "languagePairs": LANGUAGE_PAIRS,
+    }

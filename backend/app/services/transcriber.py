@@ -13,6 +13,8 @@ from typing import Iterator, Protocol
 import httpx
 from faster_whisper import WhisperModel
 
+from app.config import STT_MODELS, settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -111,7 +113,6 @@ class GPT4oTranscriber:
 
     def __init__(self, api_key: str = ""):
         if not api_key:
-            from app.config import settings
             api_key = settings.openai_api_key
         if not api_key:
             raise ValueError("OPENAI_API_KEY is not set")
@@ -171,28 +172,58 @@ class GPT4oTranscriber:
 class RunPodTranscriber:
     """Sends audio to a RunPod Serverless faster-whisper worker. Returns real timestamps."""
 
-    def __init__(self):
-        from app.config import settings
+    def __init__(self, model_id: str = "whisper-medium"):
         if not settings.stt_worker_url:
             raise ValueError("STT_WORKER_URL is not set")
         self._url = settings.stt_worker_url
         self._api_key = settings.runpod_api_key
+        self._model_id = model_id
 
     def transcribe(self, audio_path: Path, src_lang: str = "ko") -> list[TranscriptSegment]:
         audio_b64 = base64.b64encode(audio_path.read_bytes()).decode()
-        resp = httpx.post(
-            self._url,
-            headers={"Authorization": f"Bearer {self._api_key}"},
-            json={"input": {"audio_b64": audio_b64, "src_lang": src_lang}},
-            timeout=300,
-        )
-        if not resp.is_success:
-            logger.error("RunPod STT error: status=%s body=%s", resp.status_code, resp.text)
-        resp.raise_for_status()
+        job_id = self._submit(audio_b64, src_lang)
+        logger.info("RunPod STT job submitted: %s", job_id)
+        output = self._poll(job_id)
         return [
             TranscriptSegment(start=s["start"], end=s["end"], text=s["text"])
-            for s in resp.json()["output"]["segments"]
+            for s in output["segments"]
         ]
+
+    def _submit(self, audio_b64: str, src_lang: str) -> str:
+        """POST to /run and return the RunPod job ID."""
+        run_url = self._url.replace("/runsync", "/run")
+        resp = httpx.post(
+            run_url,
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            json={"input": {"audio_b64": audio_b64, "src_lang": src_lang, "model_id": self._model_id}},
+            timeout=30,
+        )
+        if not resp.is_success:
+            logger.error("RunPod STT submit error: status=%s body=%s", resp.status_code, resp.text)
+        resp.raise_for_status()
+        return resp.json()["id"]
+
+    def _poll(self, job_id: str, timeout: int = 600, interval: int = 5) -> dict:
+        """Poll /status/{job_id} until COMPLETED or FAILED."""
+        base = self._url.replace("/runsync", "").replace("/run", "")
+        status_url = f"{base}/status/{job_id}"
+        headers = {"Authorization": f"Bearer {self._api_key}"}
+        elapsed = 0
+        while elapsed < timeout:
+            time.sleep(interval)
+            elapsed += interval
+            resp = httpx.get(status_url, headers=headers, timeout=30)
+            resp.raise_for_status()
+            body = resp.json()
+            status = body.get("status")
+            logger.info("RunPod STT job %s: status=%s elapsed=%ds", job_id, status, elapsed)
+            if status == "COMPLETED":
+                return body["output"]
+            if status == "FAILED":
+                error = body.get("error", "unknown error")
+                logger.error("RunPod STT job %s failed: %s", job_id, error)
+                raise RuntimeError(f"RunPod STT worker failed: {error}")
+        raise TimeoutError(f"RunPod STT job {job_id} did not complete within {timeout}s")
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +235,8 @@ def get_transcription_engine(model_id: str, mock: bool = False) -> Transcription
         return MockTranscriber()
     if model_id == "gpt-4o-transcribe":
         return GPT4oTranscriber()
-    from app.config import settings
-    if settings.stt_worker_url:
-        return RunPodTranscriber()
+    model_cfg = STT_MODELS.get(model_id)
+    if model_cfg:
+        if model_cfg["type"] == "runpod":
+            return RunPodTranscriber(model_id)
     return LocalWhisperTranscriber(model_id)
