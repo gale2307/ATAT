@@ -2,6 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { createSocket } from "@/lib/socket";
+import { getJob } from "@/lib/api";
 import type { JobState } from "@/app/page";
 
 type Props = {
@@ -26,6 +27,15 @@ export default function JobStatus({ job, onUpdate }: Props) {
     socketRef.current = socket;
 
     socket.emit("subscribe", { jobId: job.id });
+
+    // Fetch current state once in case the job finished before the socket subscribed
+    getJob(job.id).then((data) => {
+      if (data.status === "done") {
+        onUpdate({ status: "done", progress: 100, outputUrl: data.outputUrl, subtitleUrl: data.subtitleUrl, srtUrl: data.srtUrl, embedUrl: data.embedUrl });
+      } else if (data.status === "error") {
+        onUpdate({ status: "error", error: data.error });
+      }
+    }).catch(() => {});
 
     socket.on("job:progress", (data: { jobId: string; progress: number; status: string }) => {
       if (data.jobId !== job.id) return;
