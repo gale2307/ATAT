@@ -12,10 +12,22 @@ async def emit_progress(job_id: str, progress: int, status: str):
     )
 
 
-async def emit_done(job_id: str, output_url: str | None, subtitle_url: str, srt_url: str | None = None):
+async def emit_done(
+    job_id: str,
+    output_url: str | None = None,
+    subtitle_url: str | None = None,
+    srt_url: str | None = None,
+    embed_url: str | None = None,
+):
     await sio.emit(
         "job:done",
-        {"jobId": job_id, "outputUrl": output_url, "subtitleUrl": subtitle_url, "srtUrl": srt_url},
+        {
+            "jobId": job_id,
+            "outputUrl": output_url,
+            "subtitleUrl": subtitle_url,
+            "srtUrl": srt_url,
+            "embedUrl": embed_url,
+        },
         room=f"job:{job_id}",
     )
 

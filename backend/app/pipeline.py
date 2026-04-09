@@ -10,7 +10,7 @@ from sqlmodel import Session, select
 from app.config import settings
 from app.models.database import engine
 from app.models.job import Job, JobStatus
-from app.services.downloader import download_video, extract_audio
+from app.services.downloader import download_audio, download_video, extract_audio
 from app.services.subtitle import generate_srt, generate_vtt
 from app.services.transcriber import get_transcription_engine
 from app.services.translator import get_translation_engine
@@ -45,18 +45,23 @@ async def run_job(job_id: str):
         output_dir = Path(settings.storage_path) / job_id
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # --- Step 1: Download video ---
+        # --- Step 1: Download ---
         _update(JobStatus.downloading, 5)
         await emit_progress(job_id, 5, "downloading")
-        logger.info("[%s] Downloading video: %s", job_id, job.url)
-
-        video_path, _title = await loop.run_in_executor(None, download_video, job.url, job_id)
-        logger.info("[%s] Download complete: %s", job_id, video_path)
 
         audio_path = output_dir / "audio.wav"
-        logger.info("[%s] Extracting audio", job_id)
-        await loop.run_in_executor(None, extract_audio, video_path, audio_path)
-        logger.info("[%s] Audio extracted: %s", job_id, audio_path)
+
+        if job.download_mode == "audio_only":
+            logger.info("[%s] Downloading audio only: %s", job_id, job.url)
+            audio_path, _title = await loop.run_in_executor(None, download_audio, job.url, job_id)
+            video_path = None
+        else:
+            logger.info("[%s] Downloading video: %s", job_id, job.url)
+            video_path, _title = await loop.run_in_executor(None, download_video, job.url, job_id)
+            logger.info("[%s] Extracting audio", job_id)
+            await loop.run_in_executor(None, extract_audio, video_path, audio_path)
+
+        logger.info("[%s] Audio ready: %s", job_id, audio_path)
 
         # --- Step 2: Transcribe ---
         _update(JobStatus.transcribing, 30)
@@ -88,20 +93,29 @@ async def run_job(job_id: str):
         logger.info("[%s] Generating subtitle files", job_id)
 
         generate_srt(translated, output_dir / "subtitles.srt")
-        generate_vtt(translated, output_dir / "subtitles.vtt")
+        if job.download_mode == "video":
+            generate_vtt(translated, output_dir / "subtitles.vtt")
 
         _update(
             JobStatus.done, 100,
-            output_path=str(video_path),
+            output_path=str(video_path) if video_path else None,
             subtitle_path=str(output_dir / "subtitles.srt"),
         )
         logger.info("[%s] Job complete", job_id)
-        await emit_done(
-            job_id,
-            output_url=f"/files/{job_id}/video.mp4",
-            subtitle_url=f"/files/{job_id}/subtitles.vtt",
-            srt_url=f"/files/{job_id}/subtitles.srt",
-        )
+
+        if job.download_mode == "audio_only":
+            await emit_done(
+                job_id,
+                srt_url=f"/files/{job_id}/subtitles.srt",
+                embed_url=job.url,
+            )
+        else:
+            await emit_done(
+                job_id,
+                output_url=f"/files/{job_id}/video.mp4",
+                subtitle_url=f"/files/{job_id}/subtitles.vtt",
+                srt_url=f"/files/{job_id}/subtitles.srt",
+            )
 
     except Exception as exc:
         logger.exception("[%s] Job failed: %s", job_id, exc)

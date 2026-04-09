@@ -196,7 +196,7 @@ class RunPodTranscriber:
             run_url,
             headers={"Authorization": f"Bearer {self._api_key}"},
             json={"input": {"audio_b64": audio_b64, "src_lang": src_lang, "model_id": self._model_id}},
-            timeout=30,
+            timeout=httpx.Timeout(connect=10, write=300, read=30, pool=5),
         )
         if not resp.is_success:
             logger.error("RunPod STT submit error: status=%s body=%s", resp.status_code, resp.text)

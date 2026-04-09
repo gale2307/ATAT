@@ -6,24 +6,16 @@ from app.config import settings
 import yt_dlp
 
 
-def download_audio(url: str, job_id: str) -> Path:
-    """Download audio from a YouTube URL and return the path to the extracted audio file."""
+def download_audio(url: str, job_id: str) -> tuple[Path, str]:
+    """Download audio from a YouTube URL, normalize to 16kHz mono WAV, and return the path."""
     output_dir = Path(settings.storage_path) / job_id
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    audio_path = output_dir / "audio.%(ext)s"
+    raw_path = output_dir / "audio_raw.%(ext)s"
 
     ydl_opts = {
         "format": "bestaudio/best",
-        "outtmpl": str(audio_path),
-        "postprocessors": [
-            {
-                "key": "FFmpegExtractAudio",
-                "preferredcodec": "wav",
-                "preferredquality": "0",
-            }
-        ],
-        # Required for full YouTube support
+        "outtmpl": str(raw_path),
         "extractor_args": {"youtube": {"skip": ["hls", "dash"]}},
         "quiet": True,
     }
@@ -31,8 +23,12 @@ def download_audio(url: str, job_id: str) -> Path:
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
         title = info.get("title", "video")
+        raw_file = Path(ydl.prepare_filename(info))
 
     wav_path = output_dir / "audio.wav"
+    extract_audio(raw_file, wav_path)
+    raw_file.unlink(missing_ok=True)
+
     return wav_path, title
 
 

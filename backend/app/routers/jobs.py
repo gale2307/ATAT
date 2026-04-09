@@ -21,6 +21,7 @@ class JobCreate(BaseModel):
     domain: str = "general"
     src_lang: str = "ko"
     tgt_lang: str = "en"
+    download_mode: str = "audio_only"
 
 
 class JobResponse(BaseModel):
@@ -29,6 +30,8 @@ class JobResponse(BaseModel):
     progress: int
     outputUrl: str | None
     subtitleUrl: str | None
+    srtUrl: str | None
+    embedUrl: str | None
     error: str | None
 
 
@@ -43,6 +46,7 @@ async def create_job(payload: JobCreate, background_tasks: BackgroundTasks, sess
         domain=payload.domain,
         src_lang=payload.src_lang,
         tgt_lang=payload.tgt_lang,
+        download_mode=payload.download_mode,
     )
     session.add(job)
     session.commit()
@@ -56,6 +60,8 @@ async def create_job(payload: JobCreate, background_tasks: BackgroundTasks, sess
         progress=job.progress,
         outputUrl=None,
         subtitleUrl=None,
+        srtUrl=None,
+        embedUrl=None,
         error=None,
     )
 
@@ -70,8 +76,10 @@ async def get_job(job_id: str, session: SessionDep):
         jobId=job.job_id,
         status=job.status,
         progress=job.progress,
-        outputUrl=f"/files/{job.job_id}/output.mp4" if job.output_path else None,
-        subtitleUrl=f"/files/{job.job_id}/subtitles.srt" if job.subtitle_path else None,
+        outputUrl=f"/files/{job.job_id}/video.mp4" if job.output_path and job.download_mode == "video" else None,
+        subtitleUrl=f"/files/{job.job_id}/subtitles.vtt" if job.subtitle_path and job.download_mode == "video" else None,
+        srtUrl=f"/files/{job.job_id}/subtitles.srt" if job.subtitle_path else None,
+        embedUrl=job.url if job.download_mode == "audio_only" and job.subtitle_path else None,
         error=job.error,
     )
 

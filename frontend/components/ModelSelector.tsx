@@ -20,6 +20,7 @@ const TRANSLATION_ENGINES = [
 const DOMAINS = [
   { value: "general", label: "General" },
   { value: "lol-esports", label: "LoL Esports" },
+  { value: "erbs-general", label: "Eternal Return" },
   { value: "kpop", label: "K-Pop" },
   { value: "kdrama", label: "K-Drama" },
   { value: "anime", label: "Anime" },
@@ -57,7 +58,7 @@ export default function ModelSelector({ config, onChange }: Props) {
   }
 
   return (
-    <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
       <div>
         <label className="block text-xs text-gray-400 mb-1">Language</label>
         <select
@@ -107,6 +108,18 @@ export default function ModelSelector({ config, onChange }: Props) {
           {TRANSLATION_ENGINES.map((e) => (
             <option key={e.value} value={e.value}>{e.label}</option>
           ))}
+        </select>
+      </div>
+
+      <div>
+        <label className="block text-xs text-gray-400 mb-1">Mode</label>
+        <select
+          value={config.downloadMode}
+          onChange={(e) => onChange({ ...config, downloadMode: e.target.value })}
+          className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500"
+        >
+          <option value="audio_only">Audio only</option>
+          <option value="video">Download video</option>
         </select>
       </div>
     </div>

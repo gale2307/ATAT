@@ -32,9 +32,9 @@ export default function JobStatus({ job, onUpdate }: Props) {
       onUpdate({ progress: data.progress, status: data.status as JobState["status"] });
     });
 
-    socket.on("job:done", (data: { jobId: string; outputUrl: string; subtitleUrl: string; srtUrl: string | null }) => {
+    socket.on("job:done", (data: { jobId: string; outputUrl: string | null; subtitleUrl: string | null; srtUrl: string | null; embedUrl: string | null }) => {
       if (data.jobId !== job.id) return;
-      onUpdate({ status: "done", outputUrl: data.outputUrl, subtitleUrl: data.subtitleUrl, srtUrl: data.srtUrl, progress: 100 });
+      onUpdate({ status: "done", outputUrl: data.outputUrl, subtitleUrl: data.subtitleUrl, srtUrl: data.srtUrl, embedUrl: data.embedUrl, progress: 100 });
     });
 
     socket.on("job:error", (data: { jobId: string; error: string }) => {

@@ -24,6 +24,7 @@ class Job(SQLModel, table=True):
     domain: str = "general"
     src_lang: str = "ko"
     tgt_lang: str = "en"
+    download_mode: str = "audio_only"  # "audio_only" | "video"
     status: JobStatus = JobStatus.queued
     progress: int = 0
     output_path: Optional[str] = None

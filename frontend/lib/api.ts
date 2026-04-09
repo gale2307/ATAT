@@ -6,6 +6,7 @@ type ModelConfig = {
   domain: string;
   srcLang: string;
   tgtLang: string;
+  downloadMode: string;
 };
 
 export async function submitJob(url: string, models: ModelConfig): Promise<{ jobId: string }> {
@@ -19,6 +20,7 @@ export async function submitJob(url: string, models: ModelConfig): Promise<{ job
       domain: models.domain,
       src_lang: models.srcLang,
       tgt_lang: models.tgtLang,
+      download_mode: models.downloadMode,
     }),
   });
   if (!res.ok) throw new Error(`Failed to submit job: ${res.statusText}`);

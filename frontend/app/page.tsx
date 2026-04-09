@@ -11,9 +11,10 @@ export type JobState = {
   id: string | null;
   status: "idle" | "queued" | "processing" | "done" | "error";
   progress: number;
-  outputUrl: string | null;
-  subtitleUrl: string | null;  // VTT — for browser <track>
-  srtUrl: string | null;       // SRT — for download
+  outputUrl: string | null;   // local video file (video mode)
+  subtitleUrl: string | null; // VTT for native <track> (video mode)
+  srtUrl: string | null;      // SRT for download + YouTube overlay
+  embedUrl: string | null;    // original YouTube URL (audio_only mode)
   error: string | null;
 };
 
@@ -23,6 +24,7 @@ export type ModelConfig = {
   domain: string;
   srcLang: string;
   tgtLang: string;
+  downloadMode: string;
 };
 
 export default function Home() {
@@ -33,6 +35,7 @@ export default function Home() {
     outputUrl: null,
     subtitleUrl: null,
     srtUrl: null,
+    embedUrl: null,
     error: null,
   });
 
@@ -42,10 +45,11 @@ export default function Home() {
     domain: "general",
     srcLang: "ko",
     tgtLang: "en",
+    downloadMode: "audio_only",
   });
 
   async function handleSubmit(url: string) {
-    setJob({ id: null, status: "queued", progress: 0, outputUrl: null, subtitleUrl: null, error: null });
+    setJob({ id: null, status: "queued", progress: 0, outputUrl: null, subtitleUrl: null, srtUrl: null, embedUrl: null, error: null });
     try {
       const { jobId } = await submitJob(url, modelConfig);
       setJob((prev) => ({ ...prev, id: jobId }));
@@ -53,6 +57,8 @@ export default function Home() {
       setJob((prev) => ({ ...prev, status: "error", error: String(err) }));
     }
   }
+
+  const showPlayer = job.status === "done" && (job.outputUrl || job.embedUrl);
 
   return (
     <main className="max-w-4xl mx-auto px-4 py-10 space-y-8">
@@ -71,7 +77,14 @@ export default function Home() {
         />
       )}
 
-      {job.outputUrl && <VideoPlayer src={job.outputUrl} subtitleUrl={job.subtitleUrl} srtUrl={job.srtUrl} />}
+      {showPlayer && (
+        <VideoPlayer
+          src={job.outputUrl}
+          subtitleUrl={job.subtitleUrl}
+          srtUrl={job.srtUrl}
+          embedUrl={job.embedUrl}
+        />
+      )}
     </main>
   );
 }
